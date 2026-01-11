@@ -16,15 +16,32 @@ import concurrent.futures
 
 st.set_page_config(layout="wide")
 
-#with open("api_key.txt", 'r') as api_file:
-#    api_key = api_file.readline().strip()
-
 seasons = {
     12: 'winter', 1: 'winter', 2: 'winter', 
     3: 'spring', 4: 'spring', 5: 'spring', 
     6: 'summer', 7: 'summer', 8: 'summer', 
     9: 'autumn', 10: 'autumn', 11: 'autumn'
 }
+
+if 'events_history' not in st.session_state:
+    st.session_state.events_history = pd.DataFrame(
+        columns=['timestamp', 'event_name', 'event_category', 'duration']
+    )
+
+events_history = st.session_state.events_history
+
+def log_event(event_name, event_category, duration):
+    new_event = {
+        'timestamp': datetime.now(),
+        'event_name': event_name,
+        'event_category': event_category,
+        'duration': duration
+    }
+    
+    st.session_state.events_history = pd.concat(
+        [st.session_state.events_history, pd.DataFrame([new_event])], 
+        ignore_index=True
+    )
 
 def curr_season_temp_plot(current_temp, mean_temp, lower, upper, season_name):
     """
@@ -231,6 +248,8 @@ if history_file is not None:
         df = pd.concat(processed, ignore_index=True)
         t2 = time.time()
         print(f"Время вычислений с распараллеливанием: {t2-t1}")
+        log_event('Вычисление метрик', 'С распараллеливанием', t2-t1)
+
 
     # Расчет метрик сразу для всех городов
     else:
@@ -246,6 +265,7 @@ if history_file is not None:
         df['is_anomaly'] = (df['temperature'] < df['l1']) | (df['temperature'] > df['l2'])
         t2 = time.time()
         print(f"Время вычислений без распараллеливания: {t2-t1}")
+        log_event('Вычисление метрик', 'Без распараллеливания', t2-t1)
 
 
     # Построение графика за исторический период
@@ -318,11 +338,14 @@ if history_file is not None:
                 weather_info = loop.run_until_complete(get_current_temperature_async(choise_city, api_key))
                 t2 = time.time()
                 print(f"Время синхронного запуска: {t2-t1}")
+                log_event('Запросы к OpenWeatherMap', 'Асинхронно', t2-t1)
+
             else:
                 t1 = time.time()
                 weather_info = get_current_temperature(choise_city, api_key)
                 t2 = time.time()
                 print(f"Время асинхронного запуска: {t2-t1}")
+                log_event('Запросы к OpenWeatherMap', 'Синхронно', t2-t1)
             
             curr_temp = weather_info.get('main').get('temp')
             curr_season = seasons[current_date.month]
@@ -357,9 +380,38 @@ if history_file is not None:
     else:
         pass
 
+with st.expander("Показать историю запросов (технический лог)"):
+    col1, col2 = st.columns(2)
+    with col1:
+        compute_data = events_history[events_history['event_name'] == 'Вычисление метрик']
+        if not compute_data.empty:
+            compute_avg = compute_data.groupby('event_category')['duration'].mean().reset_index()
+            
+            fig1 = px.bar(compute_avg, x='event_category', y='duration',
+                          title='Вычисление метрик (среднее время)',
+                          labels={'duration': 'Среднее время (сек)', 'event_category': 'Метод'},
+                          text_auto='.3f',
+                          color='event_category')
+            
+            fig1.update_traces(
+                hovertemplate='<b>%{x}</b><br>Среднее время: %{y:.3f} сек<extra></extra>'
+            )
+            st.plotly_chart(fig1, use_container_width=True)
     
+    with col2:
+        api_data = events_history[events_history['event_name'] == 'Запросы к OpenWeatherMap']
+        if not api_data.empty:
+            api_avg = api_data.groupby('event_category')['duration'].mean().reset_index()
+            
+            fig2 = px.bar(api_avg, x='event_category', y='duration',
+                          title='Запросы к OpenWeatherMap (среднее время)',
+                          labels={'duration': 'Среднее время (сек)', 'event_category': 'Метод'},
+                          text_auto='.3f',
+                          color='event_category')
+            
+            fig2.update_traces(
+                hovertemplate='<b>%{x}</b><br>Среднее время: %{y:.3f} сек<extra></extra>'
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
-
-
-
-    
+    st.dataframe(events_history)
